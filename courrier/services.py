@@ -122,7 +122,16 @@ def accuser_imputation(imp, user):
     return imp
 
 
-def traiter_imputation(imp, user, commentaire):
+def sous_imputations_ouvertes(imp):
+    """Sous-imputations actives non traitées, récursif (pour l'avertissement 0.2)."""
+    res = []
+    for s in imp.sous_imputations.filter(annulee_le__isnull=True).exclude(statut='TRAITEE'):
+        res.append(s)
+        res.extend(sous_imputations_ouvertes(s))
+    return res
+
+
+def traiter_imputation(imp, user, commentaire, clore_sous=False):
     if not commentaire or not commentaire.strip():
         raise ValidationError('Le commentaire de traitement est obligatoire.')
     if imp.accuse_le is None:
@@ -135,6 +144,16 @@ def traiter_imputation(imp, user, commentaire):
     imp.commentaire_traitement = commentaire.strip()
     imp.save(update_fields=['statut', 'traite_le', 'traite_par', 'commentaire_traitement'])
     journaliser(imp.courrier, 'MARQUE_TRAITE', user, {'commentaire': commentaire.strip()})
+    # 0.2 : clôture des sous-imputations ouvertes par le niveau supérieur.
+    if clore_sous:
+        for s in sous_imputations_ouvertes(imp):
+            s.statut = 'TRAITEE'
+            s.traite_le = timezone.now()
+            s.traite_par = user
+            s.commentaire_traitement = 'Clôturé par le niveau supérieur.'
+            s.save(update_fields=['statut', 'traite_le', 'traite_par', 'commentaire_traitement'])
+            journaliser(s.courrier, 'CLOTURE_PAR_NIVEAU_SUPERIEUR', user,
+                        {'direction': s.direction_cible.sigle})
     if imp.est_premier_niveau and imp.instruction == 'POUR_TRAITEMENT':
         imp.courrier.statut = 'TRAITE'
         imp.courrier.save(update_fields=['statut', 'modifie_le'])
@@ -173,3 +192,109 @@ def annuler_imputation(imp, user):
         imp.courrier.statut = 'ENREGISTRE'
         imp.courrier.save(update_fields=['statut', 'modifie_le'])
     return imp
+
+
+# === Courrier DÉPART (lot C4) ================================================
+from .models import Registre, Courrier, DestinataireCopie  # noqa: E402
+
+SIGLE_MINISTERE = 'MEF'
+
+
+def generer_reference_depart(structure_emettrice):
+    """Réserve un numéro au registre DEP et construit la référence officielle.
+
+    reference = NNNN/MEF/{chaîne sigles ancêtres→structure}/{année}
+    numero_ordre interne = DEP-{année}-{NNNNN} (cohérence C1)."""
+    registre = Registre.objects.get(code='DEP')
+    annee = date.today().year
+    with transaction.atomic():
+        compteur, _ = (CompteurRegistre.objects.select_for_update()
+                       .get_or_create(registre=registre, annee=annee))
+        compteur.dernier_numero += 1
+        compteur.save(update_fields=['dernier_numero'])
+        n = compteur.dernier_numero
+    chaine = '/'.join(d.sigle for d in structure_emettrice.get_ancestors(inclure_soi=True)
+                      if d.sigle != SIGLE_MINISTERE)  # exclut la racine ministère si présente
+    numero_ordre = f'{registre.code}-{annee}-{n:05d}'
+    reference = f'{n:04d}/{SIGLE_MINISTERE}/{chaine}/{annee}'
+    return registre, numero_ordre, reference
+
+
+def lier_et_cloturer(depart, origine, acteur):
+    """Liaison réponse→arrivée. Le PREMIER lien clôt l'arrivée (imputations + statut)."""
+    journaliser(origine, 'REPONSE_LIEE', acteur,
+                {'reference': depart.reference_complete, 'depart_id': depart.id})
+    if origine.statut == 'TRAITE':
+        return  # déjà traité : liaison seule, pas de re-clôture
+    for imp in origine.imputations.filter(annulee_le__isnull=True).exclude(statut='TRAITEE'):
+        imp.statut = 'TRAITEE'
+        imp.traite_le = timezone.now()
+        imp.traite_par = acteur
+        imp.commentaire_traitement = f'Clôturé par la réponse {depart.reference_complete}.'
+        imp.save(update_fields=['statut', 'traite_le', 'traite_par', 'commentaire_traitement'])
+        journaliser(origine, 'CLOTURE_PAR_REPONSE', acteur,
+                    {'direction': imp.direction_cible.sigle, 'reference': depart.reference_complete})
+    origine.statut = 'TRAITE'
+    origine.save(update_fields=['statut', 'modifie_le'])
+
+
+def creer_depart(*, enregistre_par, structure_emettrice, objet, correspondant, signataire_nom='',
+                 signataire_qualite='', date_signature=None, ampliations=None, courrier_origine=None,
+                 scan=None, nombre_pieces=1, confidentialite='ORDINAIRE'):
+    """Enregistre un courrier départ signé. Scan optionnel à la création (obligatoire
+    à l'expédition). Si courrier_origine : liaison + clôture automatique de l'arrivée."""
+    if courrier_origine is not None:
+        if courrier_origine.sens != 'ARRIVEE':
+            raise ValidationError("Le courrier d'origine doit être un courrier arrivée.")
+        if courrier_origine.statut == 'CLASSE':
+            raise ValidationError("Impossible de lier une réponse à un courrier classé sans suite.")
+
+    registre, numero_ordre, reference = generer_reference_depart(structure_emettrice)
+    courrier = Courrier(
+        registre=registre, numero_ordre=numero_ordre, sens='DEPART', enregistre_par=enregistre_par,
+        structure_emettrice=structure_emettrice, objet=objet, correspondant=correspondant,
+        signataire_nom=signataire_nom or '', signataire_qualite=signataire_qualite or '',
+        date_signature=date_signature, reference_complete=reference,
+        date_document=date_signature or date.today(), date_arrivee=date.today(),
+        nombre_pieces=nombre_pieces or 1, confidentialite=confidentialite or 'ORDINAIRE',
+        courrier_origine=courrier_origine, statut='ENREGISTRE')
+    if scan is not None:
+        courrier.hash_sha256 = calculer_sha256(scan)
+        courrier.scan = scan
+    courrier.save()
+    journaliser(courrier, 'ENREGISTREMENT', enregistre_par,
+                {'reference': reference, 'sens': 'DEPART'})
+    for c in (ampliations or []):
+        DestinataireCopie.objects.get_or_create(courrier=courrier, correspondant=c,
+                                                defaults={'type': 'AMPLIATION'})
+    if courrier_origine is not None:
+        lier_et_cloturer(courrier, courrier_origine, enregistre_par)
+    return courrier
+
+
+def expedier_courrier(depart, user, date_expedition=None):
+    if depart.sens != 'DEPART':
+        raise ValidationError("Seul un courrier départ peut être expédié.")
+    if not depart.scan:
+        raise ConflitImputation("Le scan signé est requis avant l'expédition.")
+    if depart.expedie_le:
+        raise ConflitImputation('Ce courrier a déjà été expédié.')
+    depart.expedie_le = date_expedition or date.today()
+    depart.save(update_fields=['expedie_le', 'modifie_le'])
+    journaliser(depart, 'EXPEDITION', user, {'date': str(depart.expedie_le)})
+    return depart
+
+
+def decharger_courrier(depart, user, date_decharge, commentaire=''):
+    if depart.sens != 'DEPART':
+        raise ValidationError("Seul un courrier départ peut recevoir une décharge.")
+    if not depart.expedie_le:
+        raise ConflitImputation("Le courrier n'a pas encore été expédié.")
+    if depart.decharge_recue_le:
+        raise ConflitImputation('La décharge a déjà été pointée.')
+    depart.decharge_recue_le = date_decharge
+    depart.decharge_commentaire = commentaire or ''
+    depart.statut = 'CLASSE'  # cycle départ court : enregistré → expédié → déchargé/classé
+    depart.save(update_fields=['decharge_recue_le', 'decharge_commentaire', 'statut', 'modifie_le'])
+    journaliser(depart, 'DECHARGE_RECUE', user, {'date': str(date_decharge), 'commentaire': commentaire or ''})
+    return depart

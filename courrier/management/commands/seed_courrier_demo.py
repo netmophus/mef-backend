@@ -22,6 +22,7 @@ from comptes.models import Direction
 from courrier.models import Registre, CompteurRegistre, Correspondant, Courrier, EvenementCourrier, Imputation
 from courrier.services import (
     generer_numero, journaliser, creer_imputation, accuser_imputation, traiter_imputation,
+    creer_depart, expedier_courrier, decharger_courrier,
 )
 
 U = get_user_model()
@@ -216,5 +217,44 @@ class Command(BaseCommand):
         # --- 1 imputation traitée (métrique accusé → traité) ---
         scenario(dgb, accuse_by=secdgb, impute_il_y_a=9, traiter_by=secdgb)
 
+        # 6) Courrier DÉPART (lot C4) — 6 départs sur 2 structures émettrices
+        dep_reg = Registre.objects.get(code='DEP')
+        CompteurRegistre.objects.filter(registre=dep_reg, annee=date.today().year).update(dernier_numero=0)
+        dgtcp = Direction.objects.get(sigle='DGTCP')
+        corrs = list(Correspondant.objects.all()[:6])
+
+        def scan_depart():
+            return ContentFile(pdf_demo('Courrier depart signe'), name='depart.pdf')
+
+        def depart(structure, objet, dest, *, scan=True, expedie_il_y_a=None, decharge_il_y_a=None,
+                   ampliations=None, origine=None):
+            d = creer_depart(
+                enregistre_par=bo, structure_emettrice=structure, objet=objet, correspondant=dest,
+                signataire_nom='M. le Secrétaire Général', signataire_qualite='Secrétaire Général',
+                date_signature=date.today() - timedelta(days=2), ampliations=ampliations or [],
+                courrier_origine=origine, scan=scan_depart() if scan else None)
+            if expedie_il_y_a is not None:
+                expedier_courrier(d, bo)
+                Courrier.objects.filter(pk=d.pk).update(expedie_le=date.today() - timedelta(days=expedie_il_y_a))
+                if decharge_il_y_a is not None:
+                    d.refresh_from_db()
+                    decharger_courrier(d, bo, date.today() - timedelta(days=decharge_il_y_a), 'Décharge signée (démo).')
+            return d
+
+        # une arrivée ordinaire encore en cours, à clôturer par le 1er départ
+        arr_a_clore = (Courrier.objects
+                       .filter(sens='ARRIVEE', statut__in=['IMPUTE', 'EN_TRAITEMENT'], confidentialite='ORDINAIRE')
+                       .order_by('id').first())
+
+        depart(dgb, "Réponse à la demande d'informations budgétaires", corrs[0],
+               expedie_il_y_a=12, decharge_il_y_a=8, origine=arr_a_clore)          # déchargé + lié (clôture)
+        depart(dgtcp, "Transmission de la situation mensuelle du Trésor", corrs[1],
+               expedie_il_y_a=15, decharge_il_y_a=5)                               # déchargé (non lié)
+        depart(dgb, "Notification d'ouverture de crédits budgétaires", corrs[2], expedie_il_y_a=3)   # expédié, 3 j
+        depart(dgtcp, "Accusé de virement au partenaire technique", corrs[3], expedie_il_y_a=10)      # expédié, 10 j
+        depart(dgb, "Projet de réponse (à scanner puis expédier)", corrs[4], scan=False)              # sans scan
+        depart(dgtcp, "Circulaire relative à l'exécution budgétaire", corrs[0],
+               ampliations=[corrs[1], corrs[2]], expedie_il_y_a=1)                 # 2 ampliations
+
         self.stdout.write(self.style.SUCCESS(
-            f'[OK] {len(COURRIERS)} courriers + scenario pilotage C3 + {len(DEMO_USERS)} users demo.'))
+            f'[OK] {len(COURRIERS)} arrivées + scenario C3 + 6 départs C4 + {len(DEMO_USERS)} users demo.'))

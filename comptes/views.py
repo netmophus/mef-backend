@@ -139,7 +139,17 @@ class MeView(APIView):
         return Response({
             'utilisateur': payload_utilisateur(user),
             'doit_changer_mdp': user.doit_changer_mdp,
+            'nom_ministere': settings.NOM_MINISTERE,
         })
+
+
+class ConfigView(APIView):
+    """GET /api/v1/config/ — configuration publique (avant authentification)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({'nom_ministere': settings.NOM_MINISTERE})
 
 
 class ChangerMotDePasseView(APIView):

@@ -13,6 +13,10 @@ class Registre(models.Model):
     code = models.CharField('Code', max_length=10, unique=True)
     libelle = models.CharField('Libellé', max_length=100)
     sens = models.CharField('Sens', max_length=10, choices=SENS)
+    # null = registre central (Bureau d'Ordre) ; renseigné = registre propre à
+    # une direction (décentralisation future par simple ajout en admin).
+    direction = models.ForeignKey('comptes.Direction', verbose_name='Direction', null=True, blank=True,
+                                  on_delete=models.PROTECT, related_name='registres')
     actif = models.BooleanField('Actif', default=True)
 
     class Meta:
@@ -105,9 +109,22 @@ class Courrier(models.Model):
 
     enregistre_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                        related_name='courriers_enregistres')
-    # Prêt pour le lot C4 (réponse à un courrier) — inutilisé ici.
+    # Liaison réponse → courrier d'origine (lot C4). Origine = un courrier ARRIVEE.
     courrier_origine = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL,
                                          related_name='reponses')
+
+    # === Champs COURRIER DÉPART (lot C4) — tous null/blank (l'arrivée n'est pas impactée) ===
+    structure_emettrice = models.ForeignKey('comptes.Direction', verbose_name='Structure émettrice',
+                                            null=True, blank=True, on_delete=models.PROTECT,
+                                            related_name='courriers_emis')
+    signataire_nom = models.CharField('Signataire — nom', max_length=150, blank=True)
+    signataire_qualite = models.CharField('Signataire — qualité', max_length=100, blank=True)
+    date_signature = models.DateField('Date de signature', null=True, blank=True)
+    reference_complete = models.CharField('Référence complète', max_length=100, unique=True,
+                                          null=True, blank=True, editable=False)
+    expedie_le = models.DateField('Expédié le', null=True, blank=True)
+    decharge_recue_le = models.DateField('Décharge reçue le', null=True, blank=True)
+    decharge_commentaire = models.CharField('Décharge — commentaire', max_length=255, blank=True)
 
     cree_le = models.DateTimeField('Créé le', auto_now_add=True)
     modifie_le = models.DateTimeField('Modifié le', auto_now=True)
@@ -147,10 +164,16 @@ class EvenementCourrier(models.Model):
         ('MARQUE_TRAITE', 'Marqué traité'),
         ('RETOUR_IMPUTATION', "Annulation d'imputation"),
         ('RELANCE', 'Relance'),
+        ('CLOTURE_PAR_NIVEAU_SUPERIEUR', 'Clôture par le niveau supérieur'),
+        # Courrier départ (lot C4)
+        ('REPONSE_LIEE', 'Réponse liée'),
+        ('CLOTURE_PAR_REPONSE', 'Clôture par réponse'),
+        ('EXPEDITION', 'Expédition'),
+        ('DECHARGE_RECUE', 'Décharge reçue'),
     ]
 
     courrier = models.ForeignKey(Courrier, on_delete=models.CASCADE, related_name='evenements')
-    type = models.CharField('Type', max_length=20, choices=TYPES)
+    type = models.CharField('Type', max_length=30, choices=TYPES)
     acteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                related_name='evenements_courrier')
     horodatage = models.DateTimeField('Horodatage', auto_now_add=True)
@@ -229,3 +252,21 @@ class Imputation(models.Model):
     @property
     def est_premier_niveau(self):
         return self.imputation_mere_id is None
+
+
+class DestinataireCopie(models.Model):
+    """Ampliation d'un courrier départ (copie pour information, sans accusé)."""
+
+    TYPES = [('AMPLIATION', 'Ampliation')]
+
+    courrier = models.ForeignKey(Courrier, on_delete=models.CASCADE, related_name='copies')
+    correspondant = models.ForeignKey(Correspondant, on_delete=models.PROTECT, related_name='ampliations')
+    type = models.CharField('Type', max_length=20, choices=TYPES, default='AMPLIATION')
+
+    class Meta:
+        verbose_name = 'Destinataire en copie'
+        verbose_name_plural = 'Destinataires en copie'
+        unique_together = [('courrier', 'correspondant')]
+
+    def __str__(self):
+        return f'{self.courrier.numero_ordre} → {self.correspondant.nom} (ampliation)'

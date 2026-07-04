@@ -19,13 +19,17 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
-# Personnalisation de l'en-tête de l'administration.
-admin.site.site_header = "Ministère de l'Économie et des Finances"
+from comptes.views import ConfigView
+
+# Personnalisation de l'en-tête de l'administration (dénomination unifiée).
+admin.site.site_header = settings.NOM_MINISTERE
 admin.site.site_title = "Administration — Finances Niger"
 admin.site.index_title = "Tableau de bord"
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # Configuration publique (dénomination, etc.)
+    path('api/v1/config/', ConfigView.as_view(), name='config'),
     # Intranet — authentification (nouvelle convention versionnée)
     path('api/v1/auth/', include('comptes.urls')),
     path('api/v1/', include('courrier.urls')),

@@ -3,7 +3,8 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from django.http import FileResponse, Http404
+from django.utils.dateparse import parse_date
+from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status
@@ -21,11 +22,12 @@ from .models import Courrier, Correspondant, Imputation
 from .serializers import (
     CourrierListSerializer, CourrierDetailSerializer,
     CourrierCreateSerializer, CourrierUpdateSerializer, CorrespondantSerializer,
-    ImputationSerializer, ImputationCreateSerializer,
+    ImputationSerializer, ImputationCreateSerializer, CourrierDepartCreateSerializer,
 )
 from .services import (
     journaliser, creer_imputation, accuser_imputation, traiter_imputation,
-    annuler_imputation, relancer_imputation, ConflitImputation,
+    annuler_imputation, relancer_imputation, sous_imputations_ouvertes,
+    expedier_courrier, decharger_courrier, calculer_sha256, valider_scan, ConflitImputation,
 )
 
 # Permissions donnant un droit de lecture sur les courriers (large ou directionnel).
@@ -60,6 +62,8 @@ class CourrierViewSet(ModelViewSet):
             return [MotDePasseAJour(), AvecPermission('courrier.modifier_courrier')()]
         if self.action == 'classer':
             return [MotDePasseAJour(), AvecPermission('courrier.classer_courrier')()]
+        if self.action in ('expedier', 'decharge', 'attacher_scan'):
+            return [MotDePasseAJour(), AvecPermission('courrier.enregistrer_courrier')()]
         if self.action == 'imputations':
             return [MotDePasseAJour(), AvecAuMoinsUne('courrier.imputer_premier_niveau', 'courrier.imputer_sous_arbre')()]
         # list, retrieve, scan
@@ -77,10 +81,11 @@ class CourrierViewSet(ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = (Courrier.objects
-              .select_related('correspondant', 'registre', 'enregistre_par')
+              .select_related('correspondant', 'registre', 'enregistre_par', 'structure_emettrice')
               .prefetch_related('evenements', 'evenements__acteur',
                                 'imputations', 'imputations__direction_cible',
-                                'imputations__impute_par', 'imputations__accuse_par'))
+                                'imputations__impute_par', 'imputations__accuse_par',
+                                'copies__correspondant', 'reponses'))
 
         if user.has_perm('courrier.consulter_courrier'):
             # Lecture large (BO, lecture centrale, imputation centrale).
@@ -97,6 +102,10 @@ class CourrierViewSet(ModelViewSet):
             visibles = visibles.filter(Q(confidentialite='ORDINAIRE') | Q(enregistre_par=user))
 
         p = self.request.query_params
+        if p.get('sens'):
+            visibles = visibles.filter(sens=p['sens'])
+        if p.get('decharge') == 'absente':
+            visibles = visibles.filter(sens='DEPART', expedie_le__isnull=False, decharge_recue_le__isnull=True)
         if p.get('registre'):
             visibles = visibles.filter(registre__code=p['registre'])
         if p.get('correspondant'):
@@ -116,7 +125,11 @@ class CourrierViewSet(ModelViewSet):
         return visibles
 
     def create(self, request, *args, **kwargs):
-        ser = CourrierCreateSerializer(data=request.data, context={'request': request})
+        # Départ (C4) ou arrivée (C1) selon le sens déclaré.
+        if request.data.get('sens') == 'DEPART':
+            ser = CourrierDepartCreateSerializer(data=request.data, context={'request': request})
+        else:
+            ser = CourrierCreateSerializer(data=request.data, context={'request': request})
         ser.is_valid(raise_exception=True)
         courrier = ser.save()
         return Response(CourrierDetailSerializer(courrier, context={'request': request}).data,
@@ -141,6 +154,54 @@ class CourrierViewSet(ModelViewSet):
         journaliser(courrier, 'CLASSEMENT', request.user)
         courrier = self.get_queryset().get(pk=courrier.pk)
         return Response(CourrierDetailSerializer(courrier, context={'request': request}).data)
+
+    def _detail(self, courrier, request):
+        courrier = self.get_queryset().get(pk=courrier.pk)
+        return Response(CourrierDetailSerializer(courrier, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def expedier(self, request, pk=None):
+        depart = self.get_object()
+        date_exp = parse_date(request.data.get('date') or '') if request.data.get('date') else None
+        try:
+            expedier_courrier(depart, request.user, date_exp)
+        except ConflitImputation as e:
+            return Response({'detail': str(e)}, status=status.HTTP_409_CONFLICT)
+        except ValidationError as e:
+            return Response({'detail': e.messages[0]}, status=400)
+        return self._detail(depart, request)
+
+    @action(detail=True, methods=['post'])
+    def decharge(self, request, pk=None):
+        depart = self.get_object()
+        d = parse_date(request.data.get('date') or '')
+        if not d:
+            return Response({'detail': 'La date de décharge est requise.'}, status=400)
+        try:
+            decharger_courrier(depart, request.user, d, request.data.get('commentaire', ''))
+        except ConflitImputation as e:
+            return Response({'detail': str(e)}, status=status.HTTP_409_CONFLICT)
+        except ValidationError as e:
+            return Response({'detail': e.messages[0]}, status=400)
+        return self._detail(depart, request)
+
+    @action(detail=True, methods=['post'], url_path='attacher-scan')
+    def attacher_scan(self, request, pk=None):
+        depart = self.get_object()
+        if depart.sens != 'DEPART':
+            return Response({'detail': "Réservé aux courriers départ."}, status=400)
+        fichier = request.FILES.get('scan')
+        if not fichier:
+            return Response({'detail': 'Le scan PDF est requis.'}, status=400)
+        try:
+            valider_scan(fichier)
+        except ValidationError as e:
+            return Response({'detail': e.messages[0]}, status=400)
+        depart.hash_sha256 = calculer_sha256(fichier)
+        depart.scan = fichier
+        depart.save(update_fields=['scan', 'hash_sha256', 'modifie_le'])
+        journaliser(depart, 'REMPLACEMENT_SCAN', request.user, {'attachement': True})
+        return self._detail(depart, request)
 
     @action(detail=True, methods=['post'], url_path='imputations')
     def imputations(self, request, pk=None):
@@ -255,8 +316,18 @@ class ImputationViewSet(GenericViewSet):
         imp = self.get_object()
         if request.user.direction_id != imp.direction_cible_id:
             raise PermissionDenied('Le traitement relève du secrétariat de la direction cible.')
+        clore = str(request.data.get('clore_sous', '')).lower() in ('true', '1', 'yes')
+        # 0.2 : avertir si des sous-imputations sont encore ouvertes.
+        ouvertes = sous_imputations_ouvertes(imp)
+        if ouvertes and not clore:
+            return Response({
+                'code': 'SOUS_IMPUTATIONS_OUVERTES',
+                'detail': 'Des sous-imputations sont encore ouvertes.',
+                'sous_imputations': [{'id': s.id, 'direction_cible': s.direction_cible.sigle,
+                                      'instruction': s.get_instruction_display()} for s in ouvertes],
+            }, status=status.HTTP_409_CONFLICT)
         try:
-            traiter_imputation(imp, request.user, request.data.get('commentaire', ''))
+            traiter_imputation(imp, request.user, request.data.get('commentaire', ''), clore_sous=clore)
         except ConflitImputation as e:
             return Response({'detail': str(e)}, status=status.HTTP_409_CONFLICT)
         except ValidationError as e:
@@ -317,6 +388,7 @@ def _item_imputation(i):
         'direction_cible': i.direction_cible.sigle, 'delai': i.delai, 'statut': i.statut,
         'anciennete_jours': _anciennete(i.date_imputation),
         'derniere_relance_le': i.derniere_relance_le,
+        'traite_le': i.traite_le,
     }
 
 
@@ -531,3 +603,87 @@ class TableauBordView(APIView):
             'imputation_vers_accuse_h': moy(h_imp_acc),
             'accuse_vers_traite_jours': moy(j_acc_tr),
         }
+
+
+# === Bordereau d'envoi (lot C4) ==============================================
+
+def _bordereau_pdf(jour, departs):
+    """Construit le PDF du bordereau des départs expédiés, groupés par correspondant."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm,
+                            leftMargin=16 * mm, rightMargin=16 * mm, title='Bordereau d\'envoi')
+    styles = getSampleStyleSheet()
+    h_min = ParagraphStyle('minist', parent=styles['Title'], fontSize=13, spaceAfter=2, textColor=colors.HexColor('#004080'))
+    h_sub = ParagraphStyle('sub', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#5b6b7a'))
+    h_corr = ParagraphStyle('corr', parent=styles['Heading3'], fontSize=10.5, textColor=colors.HexColor('#002B55'), spaceBefore=8, spaceAfter=3)
+    cell = ParagraphStyle('cell', parent=styles['Normal'], fontSize=8.5, leading=11)
+
+    story = [
+        Paragraph(settings.NOM_MINISTERE, h_min),
+        Paragraph('République du Niger', h_sub),
+        Spacer(1, 6),
+        Paragraph(f"<b>Bordereau d'envoi</b> — départs expédiés du {jour:%d/%m/%Y}", styles['Heading2']),
+        Spacer(1, 4),
+    ]
+
+    # Regroupement par correspondant (destinataire principal).
+    groupes = {}
+    for c in departs:
+        groupes.setdefault(c.correspondant.nom, []).append(c)
+
+    if not groupes:
+        story.append(Paragraph('Aucun courrier expédié à cette date.', styles['Normal']))
+    else:
+        for nom in sorted(groupes):
+            story.append(Paragraph(f'Destinataire : {nom}', h_corr))
+            data = [['Référence', 'Objet', 'Pièces', 'Signature']]
+            for c in groupes[nom]:
+                data.append([Paragraph(c.reference_complete or c.numero_ordre, cell),
+                             Paragraph(c.objet, cell), str(c.nombre_pieces), ''])
+            t = Table(data, colWidths=[45 * mm, 82 * mm, 15 * mm, 32 * mm])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#004080')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 8.5),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#ccd6e0')),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ALIGN', (2, 0), (2, -1), 'CENTER'),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f6fb')]),
+                ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            story.append(t)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+class BordereauView(APIView):
+    """GET /api/v1/bordereau/?date=JJ-MM-AAAA — bordereau PDF des départs du jour."""
+
+    def get_permissions(self):
+        return [MotDePasseAJour(), AvecPermission('courrier.enregistrer_courrier')()]
+
+    def get(self, request):
+        brut = request.query_params.get('date') or ''
+        try:
+            from datetime import datetime
+            jour = datetime.strptime(brut, '%d-%m-%Y').date()
+        except ValueError:
+            return Response({'detail': 'Date invalide (format attendu : JJ-MM-AAAA).'}, status=400)
+        departs = (Courrier.objects.filter(sens='DEPART', expedie_le=jour)
+                   .select_related('correspondant', 'structure_emettrice')
+                   .order_by('correspondant__nom', 'numero_ordre'))
+        pdf = _bordereau_pdf(jour, departs)
+        resp = HttpResponse(pdf, content_type='application/pdf')
+        resp['Content-Disposition'] = f'inline; filename="bordereau-{jour:%Y-%m-%d}.pdf"'
+        resp.xframe_options_exempt = True
+        resp['Content-Security-Policy'] = f'frame-ancestors {settings.INTRANET_URL}'
+        return resp

@@ -195,6 +195,10 @@ JWT_REFRESH_COOKIE_PATH = '/api/v1/auth/'  # le refresh n'est envoyé qu'à l'au
 # URL de l'intranet (autorisé à encadrer les scans en iframe — CSP frame-ancestors)
 INTRANET_URL = os.getenv('INTRANET_URL', 'http://localhost:3001')
 
+# Dénomination officielle du Ministère (décret d'organisation) — source unique,
+# utilisée partout (login, header, admin, écran d'accueil, bordereaux PDF).
+NOM_MINISTERE = os.getenv('NOM_MINISTERE', "Ministère de l'Économie et des Finances")
+
 # CORS — autorise les frontends Next.js (site public :3000, intranet :3001)
 CORS_ALLOW_CREDENTIALS = True            # nécessaire pour les cookies cross-origin
 CORS_ALLOWED_ORIGINS = env_list(

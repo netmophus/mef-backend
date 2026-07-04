@@ -34,6 +34,19 @@ class Direction(models.Model):
     def descendant_ids(self, inclure_soi=True):
         return [d.id for d in self.get_descendants(inclure_soi=inclure_soi)]
 
+    def get_ancestors(self, inclure_soi=True):
+        """Chaîne hiérarchique de la racine jusqu'à la direction (haut → bas)."""
+        chaine = []
+        node = self
+        while node is not None:
+            chaine.append(node)
+            node = node.parent
+        chaine.reverse()
+        return chaine if inclure_soi else chaine[:-1]
+
+    def ancestor_ids(self, inclure_soi=True):
+        return [d.id for d in self.get_ancestors(inclure_soi=inclure_soi)]
+
 
 class UtilisateurManager(BaseUserManager):
     """Manager du modèle Utilisateur (identifiant = matricule, pas d'username)."""

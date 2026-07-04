@@ -62,7 +62,7 @@
   <div>
     <p class="eyebrow">{{ index_title|default:_('Tableau de bord') }}</p>
     <h1>Bienvenue{% if user.get_short_name %}, {{ user.get_short_name }}{% elif user.get_username %}, {{ user.get_username }}{% endif %}</h1>
-    <p class="sub">Ministère de l'Économie et des Finances — République du Niger</p>
+    <p class="sub">{{ site_header }} — République du Niger</p>
   </div>
 </div>
 
