@@ -17,3 +17,20 @@ class MotDePasseAJour(BasePermission):
                 'detail': 'Vous devez changer votre mot de passe avant de continuer.',
             })
         return True
+
+
+def AvecPermission(codename):
+    """Fabrique une permission DRF qui exige `user.has_perm(codename)`.
+
+    Usage : permission_classes = [MotDePasseAJour, AvecPermission('courrier.enregistrer_courrier')]
+    `codename` est au format « app_label.codename ».
+    """
+
+    class _AvecPermission(BasePermission):
+        message = "Vous n'avez pas l'autorisation d'effectuer cette action."
+
+        def has_permission(self, request, view):
+            user = request.user
+            return bool(user and user.is_authenticated and user.has_perm(codename))
+
+    return _AvecPermission

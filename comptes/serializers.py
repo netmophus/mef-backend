@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 
 def payload_utilisateur(user):
-    """Infos utilisateur renvoyées par /login/ et /me/."""
+    """Infos utilisateur renvoyées par /login/ et /me/ (dont rôles + permissions)."""
     direction = None
     if user.direction_id:
         direction = {'sigle': user.direction.sigle, 'nom': user.direction.nom}
@@ -13,6 +13,9 @@ def payload_utilisateur(user):
         'email': user.email,
         'direction': direction,
         'fonction': user.fonction,
+        # RBAC : groups (rôles) + permissions effectives au format « app.codename ».
+        'roles': list(user.groups.values_list('name', flat=True)),
+        'permissions': sorted(user.get_all_permissions()),
     }
 
 

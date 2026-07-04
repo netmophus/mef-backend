@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'corsheaders',
     # Applications du projet (ajoutées au fur et à mesure)
     'comptes',
+    'courrier',
     'core',
     'accueil',
     'ministere',

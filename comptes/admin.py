@@ -22,6 +22,7 @@ class UtilisateurAdmin(UserAdmin):
     list_filter = ('direction', 'is_active', 'doit_changer_mdp', 'is_staff', 'is_superuser')
     search_fields = ('matricule', 'first_name', 'last_name', 'email')
     autocomplete_fields = ('direction', 'superieur')
+    filter_horizontal = ('groups', 'user_permissions')  # affectation ergonomique aux groupes
     actions = ['reinitialiser_changement_mdp']
 
     fieldsets = (
