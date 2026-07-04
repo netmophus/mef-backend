@@ -16,9 +16,10 @@ from django.contrib.auth.models import Group
 from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from comptes.models import Direction
-from courrier.models import Registre, CompteurRegistre, Correspondant, Courrier, EvenementCourrier
+from courrier.models import Registre, CompteurRegistre, Correspondant, Courrier, EvenementCourrier, Imputation
 from courrier.services import (
     generer_numero, journaliser, creer_imputation, accuser_imputation, traiter_imputation,
 )
@@ -152,29 +153,68 @@ class Command(BaseCommand):
                 c.save(update_fields=['statut'])
                 journaliser(c, 'CLASSEMENT', bo)
 
-        # 5) Scénario d'imputations pré-joué (5 courriers ordinaires)
+        # 5) Scénario d'imputations pré-joué — pilotage (lot C3)
+        #    Réparti sur 5 DG pour un tableau « par direction » parlant, avec
+        #    retards (2/7/15 j), délais proches, relance d'hier et confidentiel.
         secsg, secdgb, secdbe = users['SECSG01'], users['SECDGB01'], users['SECDBE01']
-        cs = list(Courrier.objects.filter(confidentialite='ORDINAIRE', statut='ENREGISTRE').order_by('id')[:5])
-        if len(cs) == 5:
-            c1, c2, c3, c4, c5 = cs
-            # c1 : imputé DGB, à accuser
-            creer_imputation(c1, direction_cible=dgb, instruction='POUR_TRAITEMENT', delai=None, commentaire='', impute_par=secsg)
-            # c2 : imputé + accusé (en cours)
-            i2 = creer_imputation(c2, direction_cible=dgb, instruction='POUR_TRAITEMENT', delai=None, commentaire='', impute_par=secsg)
-            accuser_imputation(i2, secdgb)
-            # c3 : cascade sur 3 niveaux DGB -> DBE -> Division des dépenses
-            i3 = creer_imputation(c3, direction_cible=dgb, instruction='POUR_ATTRIBUTION', delai=None, commentaire='', impute_par=secsg)
-            accuser_imputation(i3, secdgb)
-            i3b = creer_imputation(c3, direction_cible=dbe, instruction='POUR_ATTRIBUTION', delai=None, commentaire='', impute_par=secdgb, imputation_mere=i3)
-            accuser_imputation(i3b, secdbe)
-            creer_imputation(c3, direction_cible=divdep, instruction='POUR_TRAITEMENT', delai=None, commentaire='Traitement division', impute_par=secdbe, imputation_mere=i3b)
-            # c4 : imputé avec délai dépassé + accusé
-            i4 = creer_imputation(c4, direction_cible=dgb, instruction='POUR_AVIS', delai=date.today() - timedelta(days=5), commentaire='', impute_par=secsg)
-            accuser_imputation(i4, secdgb)
-            # c5 : imputé + accusé + traité
-            i5 = creer_imputation(c5, direction_cible=dgb, instruction='POUR_TRAITEMENT', delai=None, commentaire='', impute_par=secsg)
-            accuser_imputation(i5, secdgb)
-            traiter_imputation(i5, secdgb, f'Réponse transmise le {date.today():%d/%m/%Y}')
+        dgi = Direction.objects.get(sigle='DGI')
+        dgd = Direction.objects.get(sigle='DGD')
+        dgtcp = Direction.objects.get(sigle='DGTCP')
+        dgep = Direction.objects.get(sigle='DGEP')
+
+        pool_ord = list(Courrier.objects.filter(statut='ENREGISTRE', confidentialite='ORDINAIRE').order_by('id'))
+        pool_conf = list(Courrier.objects.filter(statut='ENREGISTRE', confidentialite='CONFIDENTIEL').order_by('id'))
+
+        def j(n):
+            return date.today() + timedelta(days=n)
+
+        def scenario(direction, *, instruction='POUR_TRAITEMENT', delai=None, accuse_by=None,
+                     impute_il_y_a=1, relance_hier=False, traiter_by=None, confidentiel=False):
+            """Crée une imputation de 1er niveau puis antidate son historique."""
+            c = (pool_conf if confidentiel else pool_ord).pop(0)
+            imp = creer_imputation(c, direction_cible=direction, instruction=instruction,
+                                   delai=delai, commentaire='', impute_par=secsg)
+            upd = {'date_imputation': timezone.now() - timedelta(days=impute_il_y_a)}
+            # L'enregistrement précède l'imputation (~5 h) → temps moyens réalistes.
+            Courrier.objects.filter(pk=c.pk).update(cree_le=upd['date_imputation'] - timedelta(hours=5))
+            if accuse_by is not None:
+                accuser_imputation(imp, accuse_by)
+                upd['accuse_le'] = timezone.now() - timedelta(days=max(0, impute_il_y_a - 1))
+            if relance_hier:
+                upd['derniere_relance_le'] = timezone.now() - timedelta(days=1)
+            Imputation.objects.filter(pk=imp.pk).update(**upd)
+            if relance_hier:
+                journaliser(c, 'RELANCE', secsg, {'direction': direction.sigle, 'commentaire': 'Relance (démo)'})
+            if traiter_by is not None:
+                imp.refresh_from_db()
+                traiter_imputation(imp, traiter_by, f'Réponse transmise le {date.today():%d/%m/%Y}')
+            return imp
+
+        # --- Retards : 3 imputations (15, 7, 2 j) sur 2 directions (DGB, DGI) ---
+        scenario(dgb, delai=j(-15), impute_il_y_a=18)                              # 15 j de retard (non accusé)
+        scenario(dgi, delai=j(-7), impute_il_y_a=10, relance_hier=True)            # 7 j de retard, relancé hier
+        scenario(dgb, delai=j(-2), accuse_by=secdgb, impute_il_y_a=6)             # 2 j de retard (accusé)
+        # --- Confidentiel en retard (objet masqué pour la vue centrale) ---
+        scenario(dgi, delai=j(-4), impute_il_y_a=5, confidentiel=True)
+        # --- Délais proches (≤ 3 j) : 2 imputations ---
+        scenario(dgd, delai=j(1), impute_il_y_a=3)                                 # échéance demain
+        scenario(dgtcp, delai=j(2), impute_il_y_a=4)                              # échéance dans 2 j
+        # --- Volume pour un tableau par direction parlant (ages variés) ---
+        scenario(dgep, impute_il_y_a=12)
+        scenario(dgep, impute_il_y_a=4)
+        scenario(dgd, impute_il_y_a=8)
+        scenario(dgtcp, impute_il_y_a=5)
+        scenario(dgi, impute_il_y_a=9)
+        scenario(dgb, accuse_by=secdgb, impute_il_y_a=7)
+        # --- Cascade DGB → DBE → Division des dépenses (agrège dans la ligne DGB) ---
+        i_root = scenario(dgb, instruction='POUR_ATTRIBUTION', accuse_by=secdgb, impute_il_y_a=11)
+        i_dbe = creer_imputation(i_root.courrier, direction_cible=dbe, instruction='POUR_ATTRIBUTION',
+                                 delai=None, commentaire='', impute_par=secdgb, imputation_mere=i_root)
+        accuser_imputation(i_dbe, secdbe)
+        creer_imputation(i_root.courrier, direction_cible=divdep, instruction='POUR_TRAITEMENT',
+                         delai=None, commentaire='Traitement division', impute_par=secdbe, imputation_mere=i_dbe)
+        # --- 1 imputation traitée (métrique accusé → traité) ---
+        scenario(dgb, accuse_by=secdgb, impute_il_y_a=9, traiter_by=secdgb)
 
         self.stdout.write(self.style.SUCCESS(
-            f'[OK] {len(COURRIERS)} courriers + scenario imputations (5) + {len(DEMO_USERS)} users demo.'))
+            f'[OK] {len(COURRIERS)} courriers + scenario pilotage C3 + {len(DEMO_USERS)} users demo.'))

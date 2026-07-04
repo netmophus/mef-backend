@@ -126,6 +126,7 @@ class Courrier(models.Model):
             ('imputer_sous_arbre', 'Peut sous-imputer dans son sous-arbre'),
             ('accuser_reception', "Peut accuser réception d'une imputation"),
             ('marquer_traite', 'Peut marquer une imputation traitée'),
+            ('voir_tableau_bord', 'Peut consulter le tableau de bord de pilotage'),
         ]
 
     def __str__(self):
@@ -145,6 +146,7 @@ class EvenementCourrier(models.Model):
         ('ACCUSE_RECEPTION', 'Accusé de réception'),
         ('MARQUE_TRAITE', 'Marqué traité'),
         ('RETOUR_IMPUTATION', "Annulation d'imputation"),
+        ('RELANCE', 'Relance'),
     ]
 
     courrier = models.ForeignKey(Courrier, on_delete=models.CASCADE, related_name='evenements')
@@ -202,6 +204,10 @@ class Imputation(models.Model):
     commentaire_traitement = models.CharField('Commentaire de traitement', max_length=500, blank=True)
 
     statut = models.CharField('Statut', max_length=20, choices=STATUT, default='EN_ATTENTE_ACCUSE')
+
+    # Dénormalisation (lot C3) : dernière relance manuelle, pour la mise en
+    # évidence rapide dans les bannettes et le tableau de bord.
+    derniere_relance_le = models.DateTimeField('Dernière relance le', null=True, blank=True)
 
     # Soft delete (annulation / retour d'imputation)
     annulee_le = models.DateTimeField('Annulée le', null=True, blank=True)

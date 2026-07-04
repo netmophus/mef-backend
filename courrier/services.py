@@ -59,9 +59,12 @@ def journaliser(courrier, type_evenement, acteur, details=None):
 
 
 # === Imputations (lot C2) ====================================================
+from datetime import timedelta  # noqa: E402
 from django.core.exceptions import ValidationError  # noqa: E402
 from django.utils import timezone  # noqa: E402
 from .models import Imputation  # noqa: E402
+
+DELAI_ANTI_RELANCE = timedelta(hours=24)  # anti-harcèlement
 
 
 class ConflitImputation(Exception):
@@ -135,6 +138,23 @@ def traiter_imputation(imp, user, commentaire):
     if imp.est_premier_niveau and imp.instruction == 'POUR_TRAITEMENT':
         imp.courrier.statut = 'TRAITE'
         imp.courrier.save(update_fields=['statut', 'modifie_le'])
+    return imp
+
+
+def relancer_imputation(imp, user, commentaire=''):
+    """Relance MANUELLE (lot C3) : trace un événement + met en évidence dans la
+    bannette du destinataire. Pas d'email. 409 si traitée/annulée ou < 24 h."""
+    if not imp.active:
+        raise ConflitImputation('Imputation annulée.')
+    if imp.statut == 'TRAITEE':
+        raise ConflitImputation('Impossible de relancer une imputation déjà traitée.')
+    maintenant = timezone.now()
+    if imp.derniere_relance_le and (maintenant - imp.derniere_relance_le) < DELAI_ANTI_RELANCE:
+        raise ConflitImputation('Une relance a déjà été envoyée il y a moins de 24 heures.')
+    imp.derniere_relance_le = maintenant
+    imp.save(update_fields=['derniere_relance_le'])
+    journaliser(imp.courrier, 'RELANCE', user,
+                {'direction': imp.direction_cible.sigle, 'commentaire': (commentaire or '').strip()})
     return imp
 
 

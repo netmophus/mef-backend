@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Q
@@ -23,7 +25,7 @@ from .serializers import (
 )
 from .services import (
     journaliser, creer_imputation, accuser_imputation, traiter_imputation,
-    annuler_imputation, ConflitImputation,
+    annuler_imputation, relancer_imputation, ConflitImputation,
 )
 
 # Permissions donnant un droit de lecture sur les courriers (large ou directionnel).
@@ -227,6 +229,8 @@ class ImputationViewSet(GenericViewSet):
             return [IsAuthenticated(), MotDePasseAJour(), AvecPermission('courrier.accuser_reception')()]
         if self.action == 'traiter':
             return [IsAuthenticated(), MotDePasseAJour(), AvecPermission('courrier.marquer_traite')()]
+        if self.action == 'relancer':
+            return [IsAuthenticated(), MotDePasseAJour(), AvecPermission('courrier.voir_tableau_bord')()]
         return [IsAuthenticated(), MotDePasseAJour()]  # annuler : contrôle auteur dans l'action
 
     def _reponse(self, imp, request):
@@ -253,6 +257,23 @@ class ImputationViewSet(GenericViewSet):
             raise PermissionDenied('Le traitement relève du secrétariat de la direction cible.')
         try:
             traiter_imputation(imp, request.user, request.data.get('commentaire', ''))
+        except ConflitImputation as e:
+            return Response({'detail': str(e)}, status=status.HTTP_409_CONFLICT)
+        except ValidationError as e:
+            return Response({'detail': e.messages[0]}, status=400)
+        return self._reponse(imp, request)
+
+    @action(detail=True, methods=['post'])
+    def relancer(self, request, pk=None):
+        imp = self.get_object()
+        user = request.user
+        # Périmètre : central (imputer_premier_niveau) → tout ; secrétariat → son sous-arbre.
+        if not user.has_perm('courrier.imputer_premier_niveau'):
+            dir_ids = user.direction.descendant_ids() if user.direction_id else []
+            if imp.direction_cible_id not in dir_ids:
+                raise PermissionDenied("Cette imputation n'est pas dans votre périmètre.")
+        try:
+            relancer_imputation(imp, user, request.data.get('commentaire', ''))
         except ConflitImputation as e:
             return Response({'detail': str(e)}, status=status.HTTP_409_CONFLICT)
         except ValidationError as e:
@@ -295,7 +316,14 @@ def _item_imputation(i):
         'instruction': i.instruction, 'instruction_libelle': i.get_instruction_display(),
         'direction_cible': i.direction_cible.sigle, 'delai': i.delai, 'statut': i.statut,
         'anciennete_jours': _anciennete(i.date_imputation),
+        'derniere_relance_le': i.derniere_relance_le,
     }
+
+
+def _tri_bannette(items):
+    """Les imputations relancées remontent en tête ; puis les plus anciennes."""
+    return sorted(items, key=lambda x: (x['derniere_relance_le'] is None,
+                                        -(x['anciennete_jours'] or 0)))
 
 
 class DirectionListView(APIView):
@@ -330,14 +358,176 @@ class BannetteView(APIView):
                      .filter(imputation_mere__isnull=True, annulee_le__isnull=True, statut='EN_ATTENTE_ACCUSE')
                      .select_related('courrier', 'courrier__correspondant', 'direction_cible'))
             data['a_imputer'] = [_item_courrier(c) for c in a_imputer]
-            data['suivi'] = [_item_imputation(i) for i in suivi]
+            data['suivi'] = _tri_bannette([_item_imputation(i) for i in suivi])
 
         if user.has_perm('courrier.accuser_reception') and user.direction_id:
             base = (Imputation.objects
                     .filter(annulee_le__isnull=True, direction_cible=user.direction)
                     .select_related('courrier', 'courrier__correspondant', 'direction_cible'))
-            data['a_accuser'] = [_item_imputation(i) for i in base.filter(statut='EN_ATTENTE_ACCUSE')]
-            data['en_cours'] = [_item_imputation(i) for i in base.filter(statut='ACCUSEE')]
+            data['a_accuser'] = _tri_bannette([_item_imputation(i) for i in base.filter(statut='EN_ATTENTE_ACCUSE')])
+            data['en_cours'] = _tri_bannette([_item_imputation(i) for i in base.filter(statut='ACCUSEE')])
             data['traites'] = [_item_imputation(i) for i in base.filter(statut='TRAITEE')]
 
         return Response(data)
+
+
+# === Tableau de bord de pilotage (lot C3) ====================================
+
+def _age_imputation(i, today):
+    """Ancienneté : jours depuis date_imputation si non accusée, sinon accuse_le."""
+    ref = i.accuse_le or i.date_imputation
+    if hasattr(ref, 'date'):
+        ref = ref.date()
+    return (today - ref).days
+
+
+def _direction_reporting(direction, racine_ids, dir_by_id):
+    """Remonte jusqu'à la direction de « premier niveau » du périmètre.
+
+    On s'arrête quand la direction courante EST une racine du périmètre, ou que
+    son parent en est une (elle est alors une direction de 1er niveau)."""
+    node = direction
+    while (node.parent_id is not None and node.id not in racine_ids
+           and node.parent_id not in racine_ids):
+        node = dir_by_id[node.parent_id]
+    return node
+
+
+def _objet_visible(c, user):
+    """Masque l'objet d'un courrier confidentiel pour qui n'y a pas droit."""
+    if c.confidentialite == 'CONFIDENTIEL' and not (
+            user.has_perm('courrier.consulter_confidentiel') or c.enregistre_par_id == user.id):
+        return 'Pli confidentiel'
+    return c.objet
+
+
+def _ligne_pilotage(i, user, today):
+    c = i.courrier
+    return {
+        'imputation_id': i.id,
+        'courrier': {'id': c.id, 'numero': c.numero_ordre, 'objet': _objet_visible(c, user),
+                     'correspondant': c.correspondant.nom},
+        'direction_cible': i.direction_cible.sigle,
+        'instruction': i.get_instruction_display(),
+        'delai': i.delai,
+        'jours_de_retard': (today - i.delai).days if i.delai else None,
+        'derniere_relance_le': i.derniere_relance_le,
+    }
+
+
+class TableauBordView(APIView):
+    """GET /api/v1/tableau-bord/ — pilotage du courrier arrivée.
+
+    Central (imputer_premier_niveau) : tout le ministère.
+    Secrétariat : restreint à son sous-arbre (même code, périmètre filtré)."""
+
+    def get_permissions(self):
+        return [MotDePasseAJour(), AvecPermission('courrier.voir_tableau_bord')()]
+
+    def get(self, request):
+        user = request.user
+        today = timezone.localdate()
+        central = user.has_perm('courrier.imputer_premier_niveau')
+
+        if central:
+            perimetre = 'Ministère'
+            racine_ids = set(Direction.objects.filter(parent__isnull=True).values_list('id', flat=True))
+            scope_ids = None  # aucun filtre
+        else:
+            direction = getattr(user, 'direction', None)
+            perimetre = direction.sigle if direction else '—'
+            racine_ids = {direction.id} if direction else set()
+            scope_ids = set(direction.descendant_ids()) if direction else set()
+
+        dir_by_id = {d.id: d for d in Direction.objects.select_related('parent').all()}
+
+        # Imputations « actives » : non annulées, non traitées, courrier non classé.
+        imps = (Imputation.objects
+                .filter(annulee_le__isnull=True)
+                .exclude(statut='TRAITEE')
+                .exclude(courrier__statut='CLASSE')
+                .select_related('courrier', 'courrier__correspondant', 'direction_cible', 'courrier__enregistre_par'))
+        if scope_ids is not None:
+            imps = imps.filter(direction_cible_id__in=scope_ids)
+        imps = list(imps)
+
+        # Agrégation par direction de reporting (1er niveau, sous-arbre agrégé).
+        agg = {}
+        for i in imps:
+            rep = _direction_reporting(i.direction_cible, racine_ids, dir_by_id)
+            a = agg.get(rep.id)
+            if a is None:
+                a = agg[rep.id] = {'direction': {'id': rep.id, 'sigle': rep.sigle},
+                                   'actives': 0, 'en_retard': 0, '_ages': []}
+            a['actives'] += 1
+            a['_ages'].append(_age_imputation(i, today))
+            if i.delai and i.delai < today:
+                a['en_retard'] += 1
+        par_direction = []
+        for a in agg.values():
+            ages = a.pop('_ages')
+            a['age_moyen_jours'] = round(sum(ages) / len(ages), 1) if ages else 0
+            a['plus_ancien_jours'] = max(ages) if ages else 0
+            par_direction.append(a)
+        par_direction.sort(key=lambda x: (-x['en_retard'], -x['actives']))
+
+        retards = sorted(
+            (_ligne_pilotage(i, user, today) for i in imps if i.delai and i.delai < today),
+            key=lambda x: -x['jours_de_retard'])
+        proches = sorted(
+            (_ligne_pilotage(i, user, today) for i in imps
+             if i.delai and today <= i.delai <= today + timedelta(days=3)),
+            key=lambda x: x['delai'])
+
+        if central:
+            courriers_en_instance = Courrier.objects.exclude(statut__in=['TRAITE', 'CLASSE']).count()
+        else:
+            courriers_en_instance = len({i.courrier_id for i in imps})
+
+        depuis_30j = timezone.now() - timedelta(days=30)
+        traites_qs = Imputation.objects.filter(
+            annulee_le__isnull=True, statut='TRAITEE', traite_le__gte=depuis_30j)
+        if scope_ids is not None:
+            traites_qs = traites_qs.filter(direction_cible_id__in=scope_ids)
+
+        synthese = {
+            'courriers_en_instance': courriers_en_instance,
+            'imputations_en_attente_accuse': sum(1 for i in imps if i.statut == 'EN_ATTENTE_ACCUSE'),
+            'en_retard': len(retards),
+            'delais_sous_3j': len(proches),
+            'traites_30j': traites_qs.count(),
+        }
+
+        return Response({
+            'perimetre': perimetre,
+            'central': central,
+            'genere_le': timezone.now(),
+            'synthese': synthese,
+            'par_direction': par_direction,
+            'retards': retards,
+            'delais_proches': proches,
+            'temps_moyens_30j': self._temps_moyens(scope_ids, depuis_30j),
+        })
+
+    def _temps_moyens(self, scope_ids, depuis):
+        base = Imputation.objects.filter(annulee_le__isnull=True)
+        if scope_ids is not None:
+            base = base.filter(direction_cible_id__in=scope_ids)
+
+        prem = base.filter(imputation_mere__isnull=True, date_imputation__gte=depuis).select_related('courrier')
+        h_enr_imp = [(i.date_imputation - i.courrier.cree_le).total_seconds() / 3600 for i in prem]
+
+        acc = base.filter(accuse_le__gte=depuis)
+        h_imp_acc = [(i.accuse_le - i.date_imputation).total_seconds() / 3600 for i in acc]
+
+        tr = base.filter(statut='TRAITEE', traite_le__gte=depuis, accuse_le__isnull=False)
+        j_acc_tr = [(i.traite_le - i.accuse_le).total_seconds() / 86400 for i in tr]
+
+        def moy(xs):
+            return round(sum(xs) / len(xs), 1) if xs else None
+
+        return {
+            'enregistrement_vers_imputation_h': moy(h_enr_imp),
+            'imputation_vers_accuse_h': moy(h_imp_acc),
+            'accuse_vers_traite_jours': moy(j_acc_tr),
+        }
