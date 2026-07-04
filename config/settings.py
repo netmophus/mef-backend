@@ -191,6 +191,9 @@ JWT_COOKIE_SAMESITE = 'Lax'
 JWT_COOKIE_SECURE = not DEBUG            # HTTPS obligatoire hors développement
 JWT_REFRESH_COOKIE_PATH = '/api/v1/auth/'  # le refresh n'est envoyé qu'à l'auth
 
+# URL de l'intranet (autorisé à encadrer les scans en iframe — CSP frame-ancestors)
+INTRANET_URL = os.getenv('INTRANET_URL', 'http://localhost:3001')
+
 # CORS — autorise les frontends Next.js (site public :3000, intranet :3001)
 CORS_ALLOW_CREDENTIALS = True            # nécessaire pour les cookies cross-origin
 CORS_ALLOWED_ORIGINS = env_list(

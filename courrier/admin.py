@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Registre, CompteurRegistre, Correspondant, Courrier, EvenementCourrier
+from .models import Registre, CompteurRegistre, Correspondant, Courrier, EvenementCourrier, Imputation
 
 
 @admin.register(Registre)
@@ -54,4 +54,18 @@ class CourrierAdmin(admin.ModelAdmin):
         return request.user.is_superuser
 
     def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+@admin.register(Imputation)
+class ImputationAdmin(admin.ModelAdmin):
+    list_display = ('courrier', 'direction_cible', 'instruction', 'statut', 'impute_par', 'date_imputation')
+    list_filter = ('statut', 'instruction', 'direction_cible')
+    search_fields = ('courrier__numero_ordre', 'direction_cible__sigle')
+    date_hierarchy = 'date_imputation'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return request.user.is_superuser

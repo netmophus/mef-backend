@@ -21,6 +21,19 @@ class Direction(models.Model):
     def __str__(self):
         return f'{self.sigle} — {self.nom}'
 
+    def get_descendants(self, inclure_soi=True):
+        """Direction + toutes ses sous-directions (récursif). Cache par instance."""
+        descendants = getattr(self, '_descendants_cache', None)
+        if descendants is None:
+            descendants = []
+            for enfant in self.sous_directions.all():
+                descendants.extend(enfant.get_descendants(inclure_soi=True))
+            self._descendants_cache = descendants
+        return ([self] if inclure_soi else []) + list(descendants)
+
+    def descendant_ids(self, inclure_soi=True):
+        return [d.id for d in self.get_descendants(inclure_soi=inclure_soi)]
+
 
 class UtilisateurManager(BaseUserManager):
     """Manager du modèle Utilisateur (identifiant = matricule, pas d'username)."""

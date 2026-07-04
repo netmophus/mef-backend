@@ -78,21 +78,28 @@ class RefreshView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    def _echec(self, detail):
+        # Session morte : on renvoie 401 ET on purge les cookies pour éviter
+        # une boucle de redirection /login ↔ / (cookie périmé jamais nettoyé).
+        resp = Response({'detail': detail}, status=status.HTTP_401_UNAUTHORIZED)
+        _delete_jwt_cookies(resp)
+        return resp
+
     def post(self, request):
         raw = request.COOKIES.get(settings.JWT_REFRESH_COOKIE)
         if not raw:
-            return Response({'detail': 'Session absente.'}, status=status.HTTP_401_UNAUTHORIZED)
+            return self._echec('Session absente.')
         try:
             old = RefreshToken(raw)
         except TokenError:
-            return Response({'detail': 'Session expirée.'}, status=status.HTTP_401_UNAUTHORIZED)
+            return self._echec('Session expirée.')
 
         try:
             user = User.objects.get(pk=old['user_id'])
         except (User.DoesNotExist, KeyError):
-            return Response({'detail': 'Session invalide.'}, status=status.HTTP_401_UNAUTHORIZED)
+            return self._echec('Session invalide.')
         if not user.is_active:
-            return Response({'detail': 'Compte désactivé.'}, status=status.HTTP_401_UNAUTHORIZED)
+            return self._echec('Compte désactivé.')
 
         # Rotation : on blackliste l'ancien refresh puis on en émet un nouveau.
         try:

@@ -1,11 +1,17 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from .views import CourrierViewSet, CorrespondantViewSet
+from .views import (
+    CourrierViewSet, CorrespondantViewSet, ImputationViewSet, BannetteView, DirectionListView,
+)
 
 router = DefaultRouter()
-# Enregistré AVANT 'courriers' pour que /courriers/correspondants/ ne soit pas
-# capturé comme un détail de courrier (pk='correspondants').
 router.register('courriers/correspondants', CorrespondantViewSet, basename='correspondant')
 router.register('courriers', CourrierViewSet, basename='courrier')
+router.register('imputations', ImputationViewSet, basename='imputation')
 
-urlpatterns = router.urls
+urlpatterns = [
+    path('bannette/', BannetteView.as_view(), name='bannette'),
+    path('directions/', DirectionListView.as_view(), name='directions'),
+    *router.urls,
+]

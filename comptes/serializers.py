@@ -6,7 +6,7 @@ def payload_utilisateur(user):
     """Infos utilisateur renvoyées par /login/ et /me/ (dont rôles + permissions)."""
     direction = None
     if user.direction_id:
-        direction = {'sigle': user.direction.sigle, 'nom': user.direction.nom}
+        direction = {'id': user.direction.id, 'sigle': user.direction.sigle, 'nom': user.direction.nom}
     return {
         'matricule': user.matricule,
         'nom_complet': user.get_full_name() or user.matricule,

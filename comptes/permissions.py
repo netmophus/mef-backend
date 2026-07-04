@@ -34,3 +34,16 @@ def AvecPermission(codename):
             return bool(user and user.is_authenticated and user.has_perm(codename))
 
     return _AvecPermission
+
+
+def AvecAuMoinsUne(*codenames):
+    """Permission DRF exigeant au moins une des permissions listées."""
+
+    class _AvecAuMoinsUne(BasePermission):
+        message = "Vous n'avez pas l'autorisation d'accéder à cette ressource."
+
+        def has_permission(self, request, view):
+            user = request.user
+            return bool(user and user.is_authenticated and any(user.has_perm(c) for c in codenames))
+
+    return _AvecAuMoinsUne

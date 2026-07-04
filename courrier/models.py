@@ -122,6 +122,10 @@ class Courrier(models.Model):
             ('consulter_courrier', 'Peut consulter les courriers'),
             ('consulter_confidentiel', 'Peut consulter les courriers confidentiels'),
             ('classer_courrier', 'Peut classer un courrier sans suite'),
+            ('imputer_premier_niveau', 'Peut imputer un courrier au premier niveau'),
+            ('imputer_sous_arbre', 'Peut sous-imputer dans son sous-arbre'),
+            ('accuser_reception', "Peut accuser réception d'une imputation"),
+            ('marquer_traite', 'Peut marquer une imputation traitée'),
         ]
 
     def __str__(self):
@@ -136,6 +140,11 @@ class EvenementCourrier(models.Model):
         ('MODIFICATION', 'Modification'),
         ('REMPLACEMENT_SCAN', 'Remplacement du scan'),
         ('CLASSEMENT', 'Classement sans suite'),
+        ('IMPUTATION', 'Imputation'),
+        ('SOUS_IMPUTATION', 'Sous-imputation'),
+        ('ACCUSE_RECEPTION', 'Accusé de réception'),
+        ('MARQUE_TRAITE', 'Marqué traité'),
+        ('RETOUR_IMPUTATION', "Annulation d'imputation"),
     ]
 
     courrier = models.ForeignKey(Courrier, on_delete=models.CASCADE, related_name='evenements')
@@ -152,3 +161,65 @@ class EvenementCourrier(models.Model):
 
     def __str__(self):
         return f'{self.get_type_display()} — {self.courrier.numero_ordre}'
+
+
+class Imputation(models.Model):
+    """Imputation d'un courrier vers une direction (avec cascade via imputation_mere)."""
+
+    INSTRUCTION = [
+        ('POUR_TRAITEMENT', 'Pour traitement'),
+        ('POUR_AVIS', 'Pour avis'),
+        ('POUR_INFORMATION', 'Pour information'),
+        ('POUR_ATTRIBUTION', 'Pour attribution'),
+        ('M_EN_PARLER', "M'en parler"),
+    ]
+    STATUT = [
+        ('EN_ATTENTE_ACCUSE', "En attente d'accusé"),
+        ('ACCUSEE', 'Accusée'),
+        ('TRAITEE', 'Traitée'),
+    ]
+
+    courrier = models.ForeignKey(Courrier, on_delete=models.CASCADE, related_name='imputations')
+    imputation_mere = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE,
+                                        related_name='sous_imputations')
+    direction_cible = models.ForeignKey('comptes.Direction', on_delete=models.PROTECT,
+                                        related_name='imputations')
+    instruction = models.CharField('Instruction', max_length=20, choices=INSTRUCTION)
+    delai = models.DateField('Délai', null=True, blank=True)
+    commentaire = models.CharField('Commentaire', max_length=500, blank=True)
+
+    impute_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   related_name='imputations_faites')
+    date_imputation = models.DateTimeField('Date', auto_now_add=True)
+
+    accuse_le = models.DateTimeField('Accusé le', null=True, blank=True)
+    accuse_par = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                   on_delete=models.PROTECT, related_name='imputations_accusees')
+
+    traite_le = models.DateTimeField('Traité le', null=True, blank=True)
+    traite_par = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                   on_delete=models.PROTECT, related_name='imputations_traitees')
+    commentaire_traitement = models.CharField('Commentaire de traitement', max_length=500, blank=True)
+
+    statut = models.CharField('Statut', max_length=20, choices=STATUT, default='EN_ATTENTE_ACCUSE')
+
+    # Soft delete (annulation / retour d'imputation)
+    annulee_le = models.DateTimeField('Annulée le', null=True, blank=True)
+    annulee_par = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                    on_delete=models.PROTECT, related_name='imputations_annulees')
+
+    class Meta:
+        verbose_name = 'Imputation'
+        verbose_name_plural = 'Imputations'
+        ordering = ['date_imputation', 'id']
+
+    def __str__(self):
+        return f'{self.courrier.numero_ordre} → {self.direction_cible.sigle} ({self.get_instruction_display()})'
+
+    @property
+    def active(self):
+        return self.annulee_le is None
+
+    @property
+    def est_premier_niveau(self):
+        return self.imputation_mere_id is None
