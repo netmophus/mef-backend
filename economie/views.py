@@ -1,3 +1,4 @@
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -10,6 +11,8 @@ class IndicateursView(APIView):
 
     Forme : { grands: [...], cles: [...] }.
     """
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request):
         grands = IndicateurMacro.objects.filter(actif=True).order_by('ordre', 'id')

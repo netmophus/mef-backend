@@ -1,5 +1,6 @@
 from django.db.models import Count
 from rest_framework import generics
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -10,6 +11,7 @@ from .serializers import ActualiteSerializer, NumeroRevueSerializer
 class ActualiteListView(generics.ListAPIView):
     """GET /api/actualites/ — actualités actives, de la plus récente à la plus ancienne."""
 
+    permission_classes = [AllowAny]  # site public
     serializer_class = ActualiteSerializer
 
     def get_queryset(self):
@@ -21,6 +23,8 @@ class RevueAnneesView(APIView):
 
     Forme : { annees: [{ annee, n }] } (alimente YearArchive).
     """
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request):
         qs = (
@@ -36,6 +40,8 @@ class RevueAnneesView(APIView):
 
 class RevueNumerosView(APIView):
     """GET /api/revue-presse/<annee>/ — numéros d'une année."""
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request, annee):
         numeros = (

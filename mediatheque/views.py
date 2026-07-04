@@ -1,4 +1,5 @@
 from rest_framework import generics
+from rest_framework.permissions import AllowAny
 
 from .models import Photo, Video
 from .serializers import PhotoSerializer, VideoSerializer
@@ -7,6 +8,7 @@ from .serializers import PhotoSerializer, VideoSerializer
 class PhotoListView(generics.ListAPIView):
     """GET /api/mediatheque/photos/ — photos actives, ordonnées."""
 
+    permission_classes = [AllowAny]  # site public
     serializer_class = PhotoSerializer
 
     def get_queryset(self):
@@ -16,6 +18,7 @@ class PhotoListView(generics.ListAPIView):
 class VideoListView(generics.ListAPIView):
     """GET /api/mediatheque/videos/ — vidéos actives, ordonnées."""
 
+    permission_classes = [AllowAny]  # site public
     serializer_class = VideoSerializer
 
     def get_queryset(self):

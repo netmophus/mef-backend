@@ -1,4 +1,5 @@
 from django.db.models import Count
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,6 +13,8 @@ class BudgetAnneesView(APIView):
     Forme : { rubrique, annees: [{ annee, n }] } (de la plus récente à la plus
     ancienne). Alimente le composant YearArchive du frontend.
     """
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request, rubrique):
         qs = (
@@ -27,6 +30,8 @@ class BudgetAnneesView(APIView):
 
 class BudgetDocumentsView(APIView):
     """GET /api/budget/<rubrique>/<annee>/ — documents d'une rubrique pour une année."""
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request, rubrique, annee):
         docs = (

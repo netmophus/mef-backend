@@ -1,4 +1,5 @@
 from rest_framework import generics
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -14,6 +15,8 @@ class HeaderView(APIView):
 
     Renvoie : { site, contact, menu } pour alimenter le Header du frontend.
     """
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request):
         config = SiteConfig.load()
@@ -35,6 +38,8 @@ class LiensPartenairesView(APIView):
 
     Forme : { liens: [...], partenaires: [...] }.
     """
+
+    permission_classes = [AllowAny]  # site public
 
     def get(self, request):
         ctx = {'request': request}

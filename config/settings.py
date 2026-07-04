@@ -50,8 +50,11 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Tiers
     'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     # Applications du projet (ajoutées au fur et à mesure)
+    'comptes',
     'core',
     'accueil',
     'ministere',
@@ -61,6 +64,9 @@ INSTALLED_APPS = [
     'mediatheque',
     'publications',
 ]
+
+# Modèle utilisateur custom (connexion par matricule) — intranet.
+AUTH_USER_MODEL = 'comptes.Utilisateur'
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -157,10 +163,36 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
+    # Auth par cookie JWT (repli header Bearer). Voir comptes/authentication.py.
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'comptes.authentication.CookieJWTAuthentication',
+    ],
+    # Verrouillage global : tout endpoint exige l'authentification, SAUF ceux
+    # qui déclarent explicitement AllowAny (site public + auth/login/refresh).
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
 
-# CORS — autorise le frontend Next.js à appeler l'API
+from datetime import timedelta  # noqa: E402
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(hours=12),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+}
+
+# Cookies JWT httpOnly (intranet)
+JWT_ACCESS_COOKIE = 'mef_access'
+JWT_REFRESH_COOKIE = 'mef_refresh'
+JWT_COOKIE_SAMESITE = 'Lax'
+JWT_COOKIE_SECURE = not DEBUG            # HTTPS obligatoire hors développement
+JWT_REFRESH_COOKIE_PATH = '/api/v1/auth/'  # le refresh n'est envoyé qu'à l'auth
+
+# CORS — autorise les frontends Next.js (site public :3000, intranet :3001)
+CORS_ALLOW_CREDENTIALS = True            # nécessaire pour les cookies cross-origin
 CORS_ALLOWED_ORIGINS = env_list(
     'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://127.0.0.1:3000',
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001',
 )

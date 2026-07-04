@@ -21,6 +21,8 @@ from django.urls import include, path
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # Intranet — authentification (nouvelle convention versionnée)
+    path('api/v1/auth/', include('comptes.urls')),
     path('api/', include('core.urls')),
     path('api/', include('accueil.urls')),
     path('api/', include('ministere.urls')),
