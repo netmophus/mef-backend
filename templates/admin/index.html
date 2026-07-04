@@ -1,0 +1,72 @@
+{% extends "admin/index.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .niger-hero {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 22px 26px;
+    margin-bottom: 22px;
+    border-radius: 16px;
+    color: #fff;
+    background: linear-gradient(105deg, #002B55 0%, #004080 60%, #0a5ca8 100%);
+    box-shadow: 0 16px 38px rgba(0, 40, 80, 0.22);
+    position: relative;
+    overflow: hidden;
+  }
+  .niger-hero::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #E07B2C 0 33.33%, #ffffff 33.33% 66.66%, #2E8B57 66.66% 100%);
+  }
+  .niger-hero img {
+    height: 76px;
+    width: auto;
+    flex-shrink: 0;
+    filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.35));
+  }
+  .niger-hero .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #E0A92E;
+    margin: 0 0 4px;
+  }
+  .niger-hero h1 {
+    font-size: 22px;
+    font-weight: 800;
+    margin: 0 0 4px;
+    color: #fff;
+    line-height: 1.15;
+  }
+  .niger-hero p.sub {
+    margin: 0;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.82);
+  }
+  @media (max-width: 767px) {
+    .niger-hero { flex-direction: column; text-align: center; }
+    .niger-hero h1 { font-size: 19px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="niger-hero">
+  <img src="{% static 'admin_niger/armoiries-niger.png' %}" alt="Armoiries de la République du Niger">
+  <div>
+    <p class="eyebrow">{{ index_title|default:_('Tableau de bord') }}</p>
+    <h1>Bienvenue{% if user.get_short_name %}, {{ user.get_short_name }}{% elif user.get_username %}, {{ user.get_username }}{% endif %}</h1>
+    <p class="sub">Ministère de l'Économie et des Finances — République du Niger</p>
+  </div>
+</div>
+
+<div id="content-main" class="app-list">
+  {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+</div>
+{% endblock %}

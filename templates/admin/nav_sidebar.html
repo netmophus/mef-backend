@@ -1,0 +1,30 @@
+{% load i18n %}
+<button class="sticky toggle-nav-sidebar" id="toggle-nav-sidebar" aria-label="{% translate 'Toggle navigation' %}"></button>
+<nav class="sticky" id="nav-sidebar" aria-label="{% translate 'Sidebar' %}">
+  <input type="search" id="nav-filter"
+         placeholder="{% translate 'Start typing to filter…' %}"
+         aria-label="{% translate 'Filter navigation items' %}">
+  <div class="nsb">
+    {% for app in available_apps %}
+      <div class="nsb-app app-{{ app.app_label }}{% if app.app_url in request.path|urlencode %} current-app{% endif %}">
+        <a href="{{ app.app_url }}" class="nsb-app-head" title="{{ app.name }}">
+          <span class="na-ico" aria-hidden="true"></span>
+          <span class="nsb-app-name">{{ app.name }}</span>
+        </a>
+        <ul class="nsb-models">
+          {% for model in app.models %}
+            {% with model_name=model.object_name|lower %}
+              <li class="model-{{ model_name }}{% if model.admin_url in request.path|urlencode %} current-model{% endif %}">
+                {% if model.admin_url %}
+                  <a href="{{ model.admin_url }}"{% if model.admin_url in request.path|urlencode %} aria-current="page"{% endif %}>{{ model.name }}</a>
+                {% else %}
+                  <span class="nsb-plain">{{ model.name }}</span>
+                {% endif %}
+              </li>
+            {% endwith %}
+          {% endfor %}
+        </ul>
+      </div>
+    {% endfor %}
+  </div>
+</nav>

@@ -19,6 +19,11 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
+# Personnalisation de l'en-tête de l'administration.
+admin.site.site_header = "Ministère de l'Économie et des Finances"
+admin.site.site_title = "Administration — Finances Niger"
+admin.site.index_title = "Tableau de bord"
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     # Intranet — authentification (nouvelle convention versionnée)

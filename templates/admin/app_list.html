@@ -1,0 +1,42 @@
+{% load i18n %}
+
+{% if app_list %}
+  <div class="niger-applist">
+    {% for app in app_list %}
+      <section class="na-card app-{{ app.app_label }}{% if app.app_url in request.path|urlencode %} current-app{% endif %}">
+        <a href="{{ app.app_url }}" class="na-card-head" title="{{ app.name }}">
+          <span class="na-ico" aria-hidden="true"></span>
+          <span class="na-title">{{ app.name }}</span>
+          <span class="na-count">{{ app.models|length }}</span>
+        </a>
+        <ul class="na-models">
+          {% for model in app.models %}
+            {% with model_name=model.object_name|lower %}
+              <li class="model-{{ model_name }}{% if model.admin_url in request.path|urlencode %} current-model{% endif %}">
+                {% if model.admin_url %}
+                  <a class="na-model-name" href="{{ model.admin_url }}"{% if model.admin_url in request.path|urlencode %} aria-current="page"{% endif %}>{{ model.name }}</a>
+                {% else %}
+                  <span class="na-model-name na-plain">{{ model.name }}</span>
+                {% endif %}
+                <span class="na-actions">
+                  {% if model.add_url %}
+                    <a href="{{ model.add_url }}" class="na-btn na-add">+ {% translate 'Add' %}</a>
+                  {% endif %}
+                  {% if model.admin_url and show_changelinks %}
+                    {% if model.view_only %}
+                      <a href="{{ model.admin_url }}" class="na-btn na-view">{% translate 'View' %}</a>
+                    {% else %}
+                      <a href="{{ model.admin_url }}" class="na-btn na-change">{% translate 'Change' %}</a>
+                    {% endif %}
+                  {% endif %}
+                </span>
+              </li>
+            {% endwith %}
+          {% endfor %}
+        </ul>
+      </section>
+    {% endfor %}
+  </div>
+{% else %}
+  <p>{% translate 'You don’t have permission to view or edit anything.' %}</p>
+{% endif %}
