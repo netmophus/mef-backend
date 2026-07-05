@@ -13,15 +13,23 @@ from django.db import transaction
 
 from actualites.models import Actualite
 
-# Corps générique de démonstration (un paragraphe par ligne).
+# Corps de démonstration développé, en plusieurs parties (un paragraphe par ligne).
 CONTENU = (
-    "Cette actualité s'inscrit dans la dynamique de l'action du Ministère des Finances, "
-    "au service de la transparence et du développement national.\n"
-    "Le Ministère réaffirme sa détermination à conduire les réformes prioritaires et à "
-    "renforcer la mobilisation des ressources publiques.\n"
-    "Les services concernés assureront le suivi de la mise en œuvre, en lien avec "
-    "l'ensemble des parties prenantes."
+    "Dans le cadre de sa mission de pilotage de la politique économique et financière de l'État, "
+    "le Ministère de l'Économie et des Finances poursuit la mise en œuvre des réformes engagées.\n"
+    "Cette activité traduit la volonté des autorités de renforcer la transparence, la bonne "
+    "gouvernance et l'efficacité de la dépense publique, conformément aux orientations du Gouvernement.\n"
+    "Les échanges ont permis de faire le point sur l'état d'avancement des chantiers prioritaires : "
+    "modernisation des régies financières, dématérialisation de la chaîne de la dépense et "
+    "mobilisation accrue des ressources internes.\n"
+    "Le Ministre a réaffirmé l'engagement du Département à consolider les acquis et à accélérer les "
+    "réformes structurelles, au bénéfice des populations et du secteur privé.\n"
+    "Les services techniques concernés assureront le suivi rigoureux de la mise en œuvre des "
+    "décisions, en lien avec l'ensemble des parties prenantes et les partenaires au développement."
 )
+
+# ⚠️ Vidéo de DÉMONSTRATION (placeholder) — à remplacer par une vraie vidéo en admin.
+VIDEO_DEMO = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
 
 # (titre, rubrique, date, chapo, image_url, a_la_une)
 ARTICLES = [
@@ -65,9 +73,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         Actualite.objects.all().delete()
         # Les 6 actualités les plus récentes sont mises « à la une ».
+        # La 1re actualité porte une vidéo (démonstration de l'option vidéo).
         for i, (titre, rubrique, d, chapo, url, une) in enumerate(ARTICLES):
             Actualite.objects.create(
                 titre=titre, rubrique=rubrique, date=d, chapo=chapo,
-                contenu=CONTENU, image_url=url, a_la_une=(une or i < 6),
+                contenu=CONTENU, image_url=url, video_url=(VIDEO_DEMO if i == 0 else ''),
+                a_la_une=(une or i < 6),
             )
-        self.stdout.write(self.style.SUCCESS(f'[OK] {len(ARTICLES)} actualites creees.'))
+        self.stdout.write(self.style.SUCCESS(f'[OK] {len(ARTICLES)} actualites creees (1 avec video).'))

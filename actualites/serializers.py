@@ -19,6 +19,7 @@ class ActualiteSerializer(serializers.ModelSerializer):
     paragraphes, src, a_la_une }."""
 
     src = serializers.SerializerMethodField()
+    video = serializers.SerializerMethodField()
     date = serializers.SerializerMethodField()
     date_iso = serializers.SerializerMethodField()
     paragraphes = serializers.SerializerMethodField()
@@ -26,13 +27,16 @@ class ActualiteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Actualite
         fields = ['id', 'titre', 'rubrique', 'date', 'date_iso', 'chapo',
-                  'paragraphes', 'src', 'a_la_une']
+                  'paragraphes', 'src', 'video', 'a_la_une']
 
     def get_src(self, obj):
         if obj.image:
             request = self.context.get('request')
             return request.build_absolute_uri(obj.image.url) if request else obj.image.url
         return obj.image_url or None
+
+    def get_video(self, obj):
+        return obj.video_url or None
 
     def get_date(self, obj):
         return _date_fr(obj.date)

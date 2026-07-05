@@ -29,6 +29,8 @@ class Actualite(models.Model):
                               help_text="Visuel. Si vide, le champ « URL / chemin » est utilisé.")
     image_url = models.CharField('Image — URL ou chemin', max_length=500, blank=True,
                                  help_text="Utilisé si aucun fichier n'est téléversé.")
+    video_url = models.URLField('Vidéo (URL)', max_length=500, blank=True,
+                                help_text="Optionnel — YouTube/Vimeo ou fichier .mp4. Affichée à la place de l'image.")
     a_la_une = models.BooleanField('À la une', default=False)
     actif = models.BooleanField('Actif', default=True)
 
