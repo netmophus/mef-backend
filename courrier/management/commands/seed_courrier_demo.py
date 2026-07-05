@@ -28,15 +28,20 @@ from courrier.services import (
 U = get_user_model()
 MDP_DEMO = 'Passe@2026'
 
-# (matricule, prénom, nom, groupe|None, fonction, sigle_direction|None)
+# (matricule, prénom, nom, [groupes], fonction, sigle_direction|None)
 DEMO_USERS = [
-    ('BO001', 'Boubacar', 'Oumarou', 'BUREAU_ORDRE', "Agent du Bureau d'Ordre", None),
-    ('LECT001', 'Lecture', 'Centrale', 'LECTURE_COURRIER_CENTRALE', 'Lecture courrier central', None),
-    ('AGENT002', 'Amadou', 'Diallo', None, 'Agent', None),
-    ('SECSG01', 'Salif', 'Gambo', 'IMPUTATION_CENTRALE', 'Secrétariat du SG', 'SG'),
-    ('SECDGB01', 'Sanata', 'Baré', 'SECRETARIAT', 'Secrétariat DGB', 'DGB'),
-    ('SECDBE01', 'Boureima', 'Elhadji', 'SECRETARIAT', "Secrétariat DBE", 'DBE'),
-    ('SECDIV01', 'Idrissa', 'Diori', 'SECRETARIAT', 'Secrétariat Division des dépenses', 'DIVDEP'),
+    ('BO001', 'Boubacar', 'Oumarou', ['BUREAU_ORDRE'], "Agent du Bureau d'Ordre", None),
+    ('LECT001', 'Lecture', 'Centrale', ['LECTURE_COURRIER_CENTRALE'], 'Lecture courrier central', None),
+    ('CONS001', 'Consultation', 'Simple', ['LECTURE_SIMPLE'], 'Consultation du courrier', None),
+    ('AGENT002', 'Amadou', 'Diallo', [], 'Agent', None),
+    # Secrétaire Général : imputation centrale + accès aux confidentiels.
+    ('SG001', 'Mahamadou', 'Issoufou', ['IMPUTATION_CENTRALE', 'ACCES_CONFIDENTIEL'], 'Secrétaire Général', 'SG'),
+    ('SECSG01', 'Salif', 'Gambo', ['IMPUTATION_CENTRALE'], 'Secrétariat du SG', 'SG'),
+    ('SECDGB01', 'Sanata', 'Baré', ['SECRETARIAT'], 'Secrétariat DGB', 'DGB'),
+    ('SECDBE01', 'Boureima', 'Elhadji', ['SECRETARIAT'], "Secrétariat DBE", 'DBE'),
+    ('SECDGI01', 'Halima', 'Souley', ['SECRETARIAT'], 'Secrétariat DGI', 'DGI'),
+    ('SECDGTCP01', 'Moussa', 'Ali', ['SECRETARIAT'], 'Secrétariat DGTCP', 'DGTCP'),
+    ('SECDIV01', 'Idrissa', 'Diori', ['SECRETARIAT'], 'Secrétariat Division des dépenses', 'DIVDEP'),
 ]
 
 # (objet, correspondant, confidentiel, classe)
@@ -110,9 +115,9 @@ class Command(BaseCommand):
         divdep, _ = Direction.objects.get_or_create(
             sigle='DIVDEP', defaults={'nom': 'Division des dépenses', 'parent': dbe, 'ordre': 21})
 
-        # 2) Utilisateurs de démo
+        # 2) Utilisateurs de démo (les groupes proviennent des data migrations)
         users = {}
-        for matricule, prenom, nom, groupe, fonction, sigle in DEMO_USERS:
+        for matricule, prenom, nom, groupes, fonction, sigle in DEMO_USERS:
             direction = Direction.objects.get(sigle=sigle) if sigle else None
             u, _ = U.objects.get_or_create(matricule=matricule, defaults={'first_name': prenom})
             u.first_name, u.last_name, u.fonction, u.direction = prenom, nom, fonction, direction
@@ -120,9 +125,7 @@ class Command(BaseCommand):
             u.is_active = True
             u.set_password(MDP_DEMO)
             u.save()
-            u.groups.clear()
-            if groupe:
-                u.groups.add(Group.objects.get(name=groupe))
+            u.groups.set(Group.objects.filter(name__in=groupes))
             users[matricule] = u
 
         bo = users['BO001']
@@ -255,6 +258,10 @@ class Command(BaseCommand):
         depart(dgb, "Projet de réponse (à scanner puis expédier)", corrs[4], scan=False)              # sans scan
         depart(dgtcp, "Circulaire relative à l'exécution budgétaire", corrs[0],
                ampliations=[corrs[1], corrs[2]], expedie_il_y_a=1)                 # 2 ampliations
+
+        # Régularisation : TEST001 retiré du périmètre (aucune référence restante
+        # après le reset des courriers ci-dessus).
+        U.objects.filter(matricule='TEST001').delete()
 
         self.stdout.write(self.style.SUCCESS(
             f'[OK] {len(COURRIERS)} arrivées + scenario C3 + 6 départs C4 + {len(DEMO_USERS)} users demo.'))

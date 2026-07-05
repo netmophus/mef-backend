@@ -28,9 +28,6 @@ CONTENU = (
     "décisions, en lien avec l'ensemble des parties prenantes et les partenaires au développement."
 )
 
-# ⚠️ Vidéo de DÉMONSTRATION (placeholder) — à remplacer par une vraie vidéo en admin.
-VIDEO_DEMO = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'
-
 # (titre, rubrique, date, chapo, image_url, a_la_une)
 ARTICLES = [
     ('Le Ministre des Finances signe de nouveaux accords de financement', 'Activités du Ministre', date(2026, 6, 12),
@@ -73,11 +70,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         Actualite.objects.all().delete()
         # Les 6 actualités les plus récentes sont mises « à la une ».
-        # La 1re actualité porte une vidéo (démonstration de l'option vidéo).
+        # Le champ vidéo reste disponible (à renseigner en admin) mais aucun
+        # placeholder n'est semé.
         for i, (titre, rubrique, d, chapo, url, une) in enumerate(ARTICLES):
             Actualite.objects.create(
                 titre=titre, rubrique=rubrique, date=d, chapo=chapo,
-                contenu=CONTENU, image_url=url, video_url=(VIDEO_DEMO if i == 0 else ''),
-                a_la_une=(une or i < 6),
+                contenu=CONTENU, image_url=url, a_la_une=(une or i < 6),
             )
-        self.stdout.write(self.style.SUCCESS(f'[OK] {len(ARTICLES)} actualites creees (1 avec video).'))
+        self.stdout.write(self.style.SUCCESS(f'[OK] {len(ARTICLES)} actualites creees.'))
